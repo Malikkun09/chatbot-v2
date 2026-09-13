@@ -247,7 +247,7 @@ export function useChatController() {
   const sendMessages = useCallback(async (history: ChatMessage[]) => {
     const { turns, bytes } = fitPayload(history);
     if (bytes > MAX_REQUEST_BYTES) {
-      return { error: makeError("payload_too_large") };
+      return { error: makeError("payload_too_large"), keep: true };
     }
 
     const controller = new AbortController();
@@ -266,7 +266,7 @@ export function useChatController() {
     } catch (error) {
       const category = classifyThrown(error);
       setStatus(isCancel(category) ? "cancelled" : "error");
-      return { error: makeError(category) };
+      return { error: makeError(category), keep: true };
     }
 
     const contentType = response.headers.get("content-type") ?? "";
@@ -278,17 +278,17 @@ export function useChatController() {
         };
         if (payload.error?.category) category = payload.error.category;
         setStatus("error");
-        return { error: makeError(category, payload.error?.message) };
+        return { error: makeError(category, payload.error?.message), keep: true };
       } catch {
         setStatus("error");
-        return { error: makeError(category) };
+        return { error: makeError(category), keep: true };
       }
     }
 
     setStatus("streaming");
     if (!response.body) {
       setStatus("error");
-      return { error: makeError("stream_drop") };
+      return { error: makeError("stream_drop"), keep: true };
     }
 
     let usage: TokenUsage | undefined;
@@ -368,7 +368,7 @@ export function useChatController() {
           const error = makeError(payload.category || "unknown", payload.message);
           setStatus(isCancel(error.category) ? "cancelled" : "error");
           setConnectionNotice(null);
-          return { error, usage, latency, model: streamModel, keep: payload.keepPartial || sawDelta };
+          return { error, usage, latency, model: streamModel, keep: true };
         }
         if (event.event === "done") {
           const done = JSON.parse(event.data) as DoneEvent;

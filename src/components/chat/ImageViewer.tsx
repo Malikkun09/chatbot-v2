@@ -60,7 +60,12 @@ export function ImageViewer({
             </button>
           </div>
         </div>
-        <div className="image-viewer-stage">
+        <div
+          className="image-viewer-stage"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) onClose();
+          }}
+        >
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={image.src}
