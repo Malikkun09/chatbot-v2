@@ -24,6 +24,7 @@ export type ErrorCategory =
   | "payload_too_large"
   | "not_multimodal"
   | "stream_drop"
+  | "pdf_unreadable"
   | "unknown";
 
 export type AttachmentKind = "image" | "text" | "document";
@@ -49,6 +50,9 @@ export interface Attachment {
   extractedChars?: number;
   extractedTruncated?: boolean;
   extractionStatus?: ExtractionStatus;
+  visionPages?: number;
+  source?: "pdf-page";
+  pageNumber?: number;
 }
 
 export interface TokenUsage {
@@ -90,6 +94,8 @@ export interface ApiAttachment {
   kind?: AttachmentKind;
   dataUrl?: string;
   textContent?: string;
+  source?: "pdf-page";
+  pageNumber?: number;
 }
 
 export interface ApiTurn {

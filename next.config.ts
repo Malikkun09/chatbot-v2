@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  serverExternalPackages: ["unpdf"],
+  serverExternalPackages: ["unpdf", "@napi-rs/canvas"],
   async headers() {
     return [
       {

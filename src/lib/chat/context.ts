@@ -29,6 +29,22 @@ function lastUserIndex(turns: ApiTurn[]): number {
   return -1;
 }
 
+export function clampPdfPageAttachments(turns: ApiTurn[], maxPages: number): ApiTurn[] {
+  const keep = Math.max(0, maxPages);
+  const lastUser = lastUserIndex(turns);
+  return turns.map((turn, index) => {
+    if (index !== lastUser || !turn.attachments?.length) return turn;
+    let keptPages = 0;
+    const attachments = turn.attachments.filter((item) => {
+      if (item.source !== "pdf-page") return true;
+      if (keptPages >= keep) return false;
+      keptPages += 1;
+      return true;
+    });
+    return { ...turn, attachments: attachments.length ? attachments : undefined };
+  });
+}
+
 export function toApiTurns(messages: ChatMessage[]): ApiTurn[] {
   const filtered = messages.filter((message) => {
     if (message.role === "system") return false;
@@ -79,6 +95,8 @@ export function toApiTurns(messages: ChatMessage[]): ApiTurn[] {
               mimeType: attachment.mimeType,
               kind: attachment.kind,
               dataUrl: attachment.dataUrl,
+              source: attachment.source,
+              pageNumber: attachment.pageNumber,
             }),
           )
       : undefined;
@@ -123,6 +141,7 @@ function stripOldest(turns: ApiTurn[]): ApiTurn[] {
 export function fitPayload(
   messages: ChatMessage[],
   maxBytes = MAX_REQUEST_BYTES,
+  options?: { preserveLastUserImages?: boolean },
 ): { turns: ApiTurn[]; truncated: boolean; bytes: number } {
   const original = toApiTurns(messages);
   let turns = trimTurns(original);
@@ -141,7 +160,7 @@ export function fitPayload(
     if (unchanged) break;
   }
 
-  if (sizeOf() > maxBytes) {
+  if (sizeOf() > maxBytes && !options?.preserveLastUserImages) {
     truncated = true;
     const keepImagesAt = lastUserIndex(turns);
     turns = turns.map((turn, index) =>
@@ -151,7 +170,7 @@ export function fitPayload(
     );
   }
 
-  if (sizeOf() > maxBytes) {
+  if (sizeOf() > maxBytes && !options?.preserveLastUserImages) {
     truncated = true;
     turns = turns.map((turn) => ({ ...turn, attachments: undefined }));
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fitPayload, isPayloadTooLarge, toApiTurns, trimTurns } from "@/lib/chat/context";
+import { clampPdfPageAttachments, fitPayload, isPayloadTooLarge, toApiTurns, trimTurns } from "@/lib/chat/context";
 import { MAX_REQUEST_BYTES } from "@/lib/constants";
 import type { ChatMessage } from "@/lib/chat/types";
 
@@ -118,5 +118,28 @@ describe("context trim", () => {
   it("flags FUNCTION_PAYLOAD_TOO_LARGE sizes", () => {
     expect(isPayloadTooLarge(MAX_REQUEST_BYTES + 1)).toBe(true);
     expect(isPayloadTooLarge(12)).toBe(false);
+  });
+
+  it("clamps scanned PDF page images without dropping other files", () => {
+    const turns = clampPdfPageAttachments(
+      [
+        {
+          role: "user",
+          content: "jelaskan",
+          attachments: [
+            { name: "shot.png", mimeType: "image/png", kind: "image", dataUrl: "data:image/png;base64,aa" },
+            { name: "cert.pdf · page 1", mimeType: "image/jpeg", kind: "image", dataUrl: "p1", source: "pdf-page", pageNumber: 1 },
+            { name: "cert.pdf · page 2", mimeType: "image/jpeg", kind: "image", dataUrl: "p2", source: "pdf-page", pageNumber: 2 },
+            { name: "cert.pdf · page 3", mimeType: "image/jpeg", kind: "image", dataUrl: "p3", source: "pdf-page", pageNumber: 3 },
+          ],
+        },
+      ],
+      2,
+    );
+    expect(turns[0]?.attachments?.map((item) => item.name)).toEqual([
+      "shot.png",
+      "cert.pdf · page 1",
+      "cert.pdf · page 2",
+    ]);
   });
 });

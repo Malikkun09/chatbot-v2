@@ -15,6 +15,10 @@ export const MAX_EXTRACTED_TEXT_CHARS = 80_000;
 export const MAX_PDF_BYTES = 2 * 1024 * 1024;
 export const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
 
+/** First N pages rasterized for scanned PDFs. Hard cap is PDF_VISION_MAX_PAGES. */
+export const PDF_VISION_DEFAULT_PAGES = 2;
+export const PDF_VISION_MAX_PAGES = 3;
+
 export const IMAGE_MIME_PREFIX = "image/";
 
 export const TEXT_MIME_ALLOW = new Set([

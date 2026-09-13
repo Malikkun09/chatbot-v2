@@ -17,6 +17,9 @@ export function attachmentStatusNote(attachment: Attachment): string | undefined
   if (attachment.kind === "image") return undefined;
   if (attachment.kind === "text") return "Sent as text";
   if (isPdfAttachment(attachment)) {
+    if (attachment.visionPages && attachment.visionPages > 0) {
+      return `Vision · ${attachment.visionPages} page${attachment.visionPages === 1 ? "" : "s"}`;
+    }
     if (attachment.extractionStatus === "ok") {
       const parts = ["Read"];
       if (attachment.pageCount) {

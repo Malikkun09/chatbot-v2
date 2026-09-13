@@ -28,3 +28,14 @@ export function formatDocumentFailed(filename: string): string {
     "[Could not extract text from this PDF. Paste the text or attach a text-based PDF.]",
   );
 }
+
+export function formatDocumentVision(filename: string, pages: number, totalPages?: number): string {
+  const n = Math.max(1, pages);
+  const pageLabel = n === 1 ? "the first page is" : `the first ${n} pages are`;
+  const total =
+    totalPages && totalPages > n ? ` (${n} of ${totalPages} pages)` : "";
+  return formatDocumentContext(
+    filename,
+    `[No selectable text was found. This PDF is likely scanned. Using page images for vision: ${pageLabel} attached${total}. Describe what you see; do not ask the user to paste the file.]`,
+  );
+}

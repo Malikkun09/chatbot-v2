@@ -2,21 +2,8 @@ import { extractText, getDocumentProxy } from "unpdf";
 import { MAX_EXTRACTED_TEXT_CHARS } from "@/lib/attachments/config";
 import { decodeAttachmentBytes, looksLikePdf } from "@/lib/extract/bytes";
 import { capExtractedText } from "@/lib/extract/format";
+import { ensurePromiseWithResolvers } from "@/lib/extract/polyfill";
 import type { PdfExtractResult, PdfExtractStatus } from "@/lib/extract/types";
-
-function ensurePromiseWithResolvers(): void {
-  if (typeof Promise.withResolvers === "function") return;
-  // pdf.js (via unpdf) needs this; Node 20 and some test hosts omit it.
-  Promise.withResolvers = function withResolvers<T>() {
-    let resolve!: (value: T | PromiseLike<T>) => void;
-    let reject!: (reason?: unknown) => void;
-    const promise = new Promise<T>((res, rej) => {
-      resolve = res;
-      reject = rej;
-    });
-    return { promise, resolve, reject };
-  };
-}
 
 function emptyResult(status: PdfExtractStatus, pageCount = 0): PdfExtractResult {
   return { status, text: "", pageCount, chars: 0, truncated: false };

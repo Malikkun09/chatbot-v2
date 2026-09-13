@@ -1,10 +1,6 @@
 import { MAX_ATTACHMENTS } from "@/lib/attachments/config";
 import { classifyFile, isPdfAttachment } from "@/lib/attachments/validate";
-import {
-  formatDocumentContext,
-  formatDocumentEmpty,
-  formatDocumentFailed,
-} from "@/lib/extract/format";
+import { formatDocumentContext } from "@/lib/extract/format";
 import { compressImageFile } from "@/lib/images/compress";
 import type { Attachment } from "@/lib/chat/types";
 import { createId } from "@/lib/id";
@@ -35,10 +31,10 @@ export function documentStub(attachment: Attachment): string {
 }
 
 export function pdfContextBlock(attachment: Attachment): string {
-  if (attachment.extractionStatus === "empty") return formatDocumentEmpty(attachment.name);
-  if (attachment.extractionStatus === "failed") return formatDocumentFailed(attachment.name);
   const body = attachment.textContent?.trim() ?? "";
-  if (body) return formatDocumentContext(attachment.name, body);
+  if (attachment.extractionStatus === "ok" && body) {
+    return formatDocumentContext(attachment.name, body);
+  }
   return "";
 }
 

@@ -1,8 +1,9 @@
 import { MAX_REQUEST_BYTES } from "@/lib/constants";
 import { classifyThrown, errorMessage, makeError } from "@/lib/chat/errors";
-import { estimatePayloadBytes, fitPayload, isPayloadTooLarge } from "@/lib/chat/context";
+import { clampPdfPageAttachments, estimatePayloadBytes, fitPayload, isPayloadTooLarge } from "@/lib/chat/context";
 import type { ApiTurn, ChatRequestBody, TokenUsage } from "@/lib/chat/types";
 import { getChatProvider } from "@/lib/ai/provider";
+import { resolveVisionFallback } from "@/lib/ai/vision-fallback";
 import { hasImageAttachments, isImageAttachment, isTextAttachment } from "@/lib/attachments/validate";
 import { hydrateDocumentTurns, needsDocumentHydration } from "@/lib/extract/documents";
 import { encodeSse } from "@/lib/ai/sse";
@@ -40,6 +41,8 @@ function toFitMessages(turns: ApiTurn[]) {
       status: "ready" as const,
       dataUrl: attachment.dataUrl,
       textContent: attachment.textContent,
+      source: attachment.source,
+      pageNumber: attachment.pageNumber,
     })),
   }));
 }
@@ -67,7 +70,7 @@ export async function POST(request: Request) {
   }
 
   const incoming = Array.isArray(body.messages) ? body.messages.filter(isApiTurn) : [];
-  const { provider, model } = getChatProvider(typeof body.model === "string" ? body.model : undefined);
+  let { provider, model } = getChatProvider(typeof body.model === "string" ? body.model : undefined);
 
   if (!model.multimodal && incoming.some((turn) => hasImageAttachments(turn.attachments))) {
     logChat("error", { category: "not_multimodal", model: model.id });
@@ -87,30 +90,76 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(encodeSse(event, data)));
       };
 
-      send("meta", { model: model.id, provider: model.provider, label: model.label });
-
       try {
-        if (needsDocumentHydration(incoming)) {
+        const needsDocs = needsDocumentHydration(incoming);
+        if (needsDocs) {
           send("status", { message: "Reading PDF…" });
         }
 
-        const hydrated = await hydrateDocumentTurns(incoming);
+        const hydrated = needsDocs
+          ? await hydrateDocumentTurns(incoming, {
+              onStatus: (message) => send("status", { message }),
+            })
+          : { turns: incoming, documents: [], visionPages: 0, error: undefined };
+
         if (hydrated.documents.length) {
-          send("documents", { items: hydrated.documents });
+          send("documents", {
+            items: hydrated.documents.map((item) => ({
+              name: item.name,
+              status: item.status,
+              pageCount: item.pageCount,
+              chars: item.chars,
+              truncated: item.truncated,
+              message: item.message,
+              text: item.text,
+              visionPages: item.visionPages,
+            })),
+          });
           logChat("extract", {
             model: model.id,
             pdfs: hydrated.documents.length,
             chars: hydrated.documents.reduce((sum, item) => sum + (item.chars ?? 0), 0),
             truncated: hydrated.documents.some((item) => Boolean(item.truncated)),
+            visionPages: hydrated.visionPages,
           });
         }
 
-        const fitted = fitPayload(toFitMessages(hydrated.turns));
+        if (hydrated.error) {
+          send("meta", { model: model.id, provider: model.provider, label: model.label });
+          logChat("error", { category: hydrated.error.category, model: model.id });
+          send("error", {
+            category: hydrated.error.category,
+            message: hydrated.error.message,
+          });
+          controller.close();
+          return;
+        }
+
+        const fallback = resolveVisionFallback(model, hydrated.visionPages);
+        if (fallback.switched) {
+          send("status", { message: "Scanned PDF — using vision model…" });
+          ({ provider, model } = getChatProvider(fallback.model.id));
+          logChat("vision_fallback", { model: model.id, visionPages: hydrated.visionPages });
+        }
+
+        send("meta", { model: model.id, provider: model.provider, label: model.label });
+
+        let prepared = hydrated.turns;
+        if (hydrated.visionPages > 1 && isPayloadTooLarge(estimatePayloadBytes({ messages: prepared }))) {
+          prepared = clampPdfPageAttachments(prepared, 1);
+        }
+
+        const fitted = fitPayload(toFitMessages(prepared), MAX_REQUEST_BYTES, {
+          preserveLastUserImages: hydrated.visionPages > 0,
+        });
         if (isPayloadTooLarge(fitted.bytes)) {
           logChat("error", { category: "payload_too_large", bytes: fitted.bytes });
           send("error", {
             category: "payload_too_large",
-            message: errorMessage("payload_too_large", model.provider),
+            message:
+              hydrated.visionPages > 0
+                ? "Scanned PDF page images are too large to send. Try a 1–2 page file or a smaller scan."
+                : errorMessage("payload_too_large", model.provider),
           });
           controller.close();
           return;

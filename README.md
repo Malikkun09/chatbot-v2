@@ -38,7 +38,7 @@ Picker models (OpenRouter `:free` ids). Last pick is stored in `sessionStorage` 
 
 `:free` / catalog ids go to `https://openrouter.ai/api/v1/chat/completions`. Non-`:free` NVIDIA ids (for example `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning`) stay on NVIDIA NIM.
 
-Images are never sent to text-only models. The composer blocks send and offers **Use Omni** or **Remove images**.
+Images are never sent to text-only models. The composer blocks send and offers **Use Omni** or **Remove images**. Scanned PDFs are an exception: the server rasterizes page images and auto-falls back to Omni for that request only (the picker is unchanged).
 
 `OPENROUTER_API_KEYS` / `NVIDIA_API_KEYS` (comma-separated) are reliability failover only: random rotate, **max 3 attempts**, and only **before any thinking or content token**. After tokens start, the app keeps the partial reply and shows Retry. Cancel does not failover. Keys are never logged or sent to the browser.
 
@@ -49,7 +49,7 @@ src/
   app/api/chat/route.ts           SSE route, payload 413, capability check
   lib/ai/                         catalog, routing, OpenRouter + NIM, failover stream
   lib/attachments/                MIME/size limits, ingest, validation
-  lib/extract/                    server-side PDF/text extraction (unpdf)
+  lib/extract/                    server-side PDF text (unpdf) + scanned page rasterize
   lib/scroll/                     follow-mode helpers (no scrollIntoView)
   lib/chat/                       types, trim, session, errors, model preference
   lib/markdown/                   sanitize schema, chart spec, safe URLs
@@ -58,7 +58,7 @@ src/
   hooks/use-chat-controller.ts
 ```
 
-- **UI state ≠ API payload.** The transcript can keep older images as stubs; the POST body only includes recent turns and the latest image/PDF bytes. Text files are inlined on the client. PDFs are decoded on the server with `unpdf` (no shell CLI) and injected as `Document:` text; raw PDF bytes are never sent to the model.
+- **UI state ≠ API payload.** The transcript can keep older images as stubs; the POST body only includes recent turns and the latest image/PDF bytes. Text files are inlined on the client. PDFs are decoded on the server with `unpdf` (no shell CLI). Digital PDFs inject `Document:` text; scanned/empty PDFs rasterize the first 2 pages (max 3) to JPEG and send them as vision `image_url` parts. Raw PDF bytes are never sent to the model.
 - **Thinking ≠ answer.** `<think>` / `reasoning_content` is stored on `message.thinking` and rendered by `ThinkingBlock`, never dumped into Markdown.
 - **Streaming:** raw text is the source of truth while tokens arrive. When the stream completes, `MarkdownRenderer` remounts so tables/fences/lists re-parse as a whole.
 - **Scroll:** one `overflow-y` pane (`ChatScrollContainer`). Auto-follow only when near the bottom. Scrolling up pauses follow and shows **New content**. Image viewer is a portal and does not reset chat scroll.
@@ -121,7 +121,7 @@ This hostname is independent of the portfolio site.
 
 - Enter sends, Shift+Enter newline, Stop cancels in-flight generation (no failover), Retry on failed assistant turns.
 - Model picker is in the header. Text-only models cannot send images.
-- Attachments: file picker, drag-and-drop, clipboard screenshots (text paste still works). Images compress in the browser (max edge 1440, WebP/JPEG ~0.8). PDFs are sent as base64 (max 2MB) and read as text on the server. Click a thumbnail for an in-app viewer (not browser fullscreen).
+- Attachments: file picker, drag-and-drop, clipboard screenshots (text paste still works). Images compress in the browser (max edge 1440, WebP/JPEG ~0.8). PDFs are sent as base64 (max 2MB) and read as text on the server. Scanned PDFs with no selectable text are rasterized (pure JS via `unpdf` + `@napi-rs/canvas`, first 2 pages) and sent to a vision model; text-only Super/Ultra auto-fall back to Omni for that turn only. Click a thumbnail for an in-app viewer (not browser fullscreen).
 - Oversized bodies return **413** JSON early (`payload_too_large`) instead of Vercel `FUNCTION_PAYLOAD_TOO_LARGE`.
 - Charts are JSON specs rendered as SVG by `ChartRenderer` (bar/line/pie/scatter), marked illustrative. Models are instructed not to emit raw SVG.
 - Metrics: TTFT is time-to-first-token; tok/s uses post-TTFT generation time. They are not mixed.
