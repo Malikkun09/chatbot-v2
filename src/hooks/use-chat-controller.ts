@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { defaultVisionModel, getCatalogModel, type ModelProviderId } from "@/lib/ai/catalog";
 import { MAX_ATTACHMENTS } from "@/lib/attachments/config";
 import { ingestFiles, revokePreview } from "@/lib/attachments/ingest";
-import { classifyFile, hasImageAttachments } from "@/lib/attachments/validate";
+import { classifyFile, hasImageAttachments, isPdfAttachment } from "@/lib/attachments/validate";
 import { MAX_REQUEST_BYTES } from "@/lib/constants";
 import { classifyHttpStatus, classifyThrown, makeError } from "@/lib/chat/errors";
 import { fitPayload } from "@/lib/chat/context";
@@ -18,6 +18,7 @@ import type {
   MessageMetrics,
   TokenUsage,
 } from "@/lib/chat/types";
+import type { DocumentReadInfo } from "@/lib/extract/types";
 import { readSse } from "@/lib/ai/sse";
 import { createId } from "@/lib/id";
 
@@ -52,6 +53,39 @@ function isCancel(category: ErrorCategory): boolean {
 
 function readyAttachments(items: Attachment[]): Attachment[] {
   return items.filter((item) => item.status === "ready" && item.id !== LIMIT_ID);
+}
+
+function applyDocumentReads(messages: ChatMessage[], items: DocumentReadInfo[]): ChatMessage[] {
+  if (!items.length) return messages;
+  let lastUser = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (messages[index]?.role === "user") lastUser = index;
+  }
+  if (lastUser < 0) return messages;
+
+  return messages.map((message, index) => {
+    if (index !== lastUser || !message.attachments?.length) return message;
+    let cursor = 0;
+    return {
+      ...message,
+      attachments: message.attachments.map((attachment) => {
+        if (!isPdfAttachment(attachment)) return attachment;
+        const info = items[cursor];
+        cursor += 1;
+        if (!info) return attachment;
+        return {
+          ...attachment,
+          dataUrl: info.status === "failed" ? attachment.dataUrl : undefined,
+          textContent: info.text ?? attachment.textContent,
+          extractionStatus: info.status,
+          pageCount: info.pageCount,
+          extractedChars: info.chars,
+          extractedTruncated: info.truncated,
+          error: info.status === "ok" ? undefined : info.message,
+        };
+      }),
+    };
+  });
 }
 
 export function useChatController() {
@@ -303,6 +337,13 @@ export function useChatController() {
           const meta = JSON.parse(event.data) as { model?: string; provider?: ModelProviderId };
           streamModel = meta.model;
           streamProvider = meta.provider;
+          continue;
+        }
+        if (event.event === "documents") {
+          const payload = JSON.parse(event.data) as { items?: DocumentReadInfo[] };
+          if (payload.items?.length) {
+            setMessages((current) => applyDocumentReads(current, payload.items as DocumentReadInfo[]));
+          }
           continue;
         }
         if (event.event === "status") {

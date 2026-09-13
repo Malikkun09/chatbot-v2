@@ -7,14 +7,19 @@ function stubImages(messages: ChatMessage[]): ChatMessage[] {
   }, -1);
 
   return messages.map((message, index) => {
-    if (!message.attachments?.length || index === lastUser) return message;
+    if (!message.attachments?.length) return message;
+    const keepImageBytes = index === lastUser;
     return {
       ...message,
-      attachments: message.attachments.map((attachment) => ({
-        ...attachment,
-        dataUrl: undefined,
-        stub: true,
-      })),
+      attachments: message.attachments.map((attachment) => {
+        if (attachment.kind === "document" || attachment.kind === "text") {
+          return { ...attachment, dataUrl: undefined };
+        }
+        if (!keepImageBytes) {
+          return { ...attachment, dataUrl: undefined, stub: true };
+        }
+        return attachment;
+      }),
     };
   });
 }

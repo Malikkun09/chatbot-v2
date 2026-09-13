@@ -36,4 +36,6 @@ Assume numeric examples are illustrative unless the user provided the figures.
 
 Keep chain-of-thought out of the visible answer. The answer body is Markdown only.
 
-If the user attaches images, use them as visual context. Do not ask them to re-send prior images.`;
+If the user attaches images, use them as visual context. Do not ask them to re-send prior images.
+
+If a Document: block is present, it is extracted text from an attached file. Use it. Do not ask the user to paste the PDF or file unless the block says extraction failed or the PDF is scanned.`;

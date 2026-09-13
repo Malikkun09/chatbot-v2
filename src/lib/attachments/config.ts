@@ -6,6 +6,13 @@ export const MAX_SOURCE_IMAGE_BYTES = 12 * 1024 * 1024;
 export const MAX_COMPRESSED_IMAGE_BYTES = 700_000;
 
 export const MAX_TEXT_FILE_BYTES = 80_000;
+/** Cap for extracted PDF / inlined document text sent to the model. */
+export const MAX_EXTRACTED_TEXT_CHARS = 80_000;
+/**
+ * PDFs are sent as base64 in the JSON body. Stay well under Vercel's ~4.5MB
+ * function payload (and MAX_REQUEST_BYTES) after encoding overhead.
+ */
+export const MAX_PDF_BYTES = 2 * 1024 * 1024;
 export const MAX_DOCUMENT_BYTES = 8 * 1024 * 1024;
 
 export const IMAGE_MIME_PREFIX = "image/";

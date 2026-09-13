@@ -6,6 +6,7 @@ import { Metrics } from "@/components/chat/Metrics";
 import { ThinkingBlock } from "@/components/chat/ThinkingBlock";
 import { ToolCallBlock } from "@/components/chat/ToolCallBlock";
 import { formatSize } from "@/lib/attachments/ingest";
+import { attachmentKindLabel, attachmentStatusNote } from "@/lib/attachments/labels";
 import type { Attachment, ChatMessage } from "@/lib/chat/types";
 
 export function ChatMessageView({
@@ -31,8 +32,9 @@ export function ChatMessageView({
       {message.attachments?.length ? (
         <ul className="message-thumbs">
           {message.attachments.map((attachment) => {
-            const src = attachment.previewUrl || attachment.dataUrl;
-            if (attachment.kind === "image" && src) {
+            const src =
+              attachment.kind === "image" ? attachment.previewUrl || attachment.dataUrl : undefined;
+            if (src) {
               return (
                 <li key={attachment.id}>
                   <button
@@ -47,11 +49,13 @@ export function ChatMessageView({
                 </li>
               );
             }
+            const note = attachmentStatusNote(attachment);
             return (
               <li key={attachment.id} className="file-chip">
-                <span className="file-kind">{attachment.kind === "text" ? "Text" : "File"}</span>
+                <span className="file-kind">{attachmentKindLabel(attachment)}</span>
                 <span>{attachment.name}</span>
                 {attachment.sizeBytes ? <span>{formatSize(attachment.sizeBytes)}</span> : null}
+                {note ? <span className="file-vision-note">{note}</span> : null}
               </li>
             );
           })}

@@ -28,6 +28,7 @@ export type ErrorCategory =
 
 export type AttachmentKind = "image" | "text" | "document";
 export type AttachmentStatus = "pending" | "processing" | "ready" | "error";
+export type ExtractionStatus = "ok" | "empty" | "failed";
 
 export interface Attachment {
   id: string;
@@ -44,6 +45,10 @@ export interface Attachment {
   error?: string;
   sizeBytes?: number;
   progress?: number;
+  pageCount?: number;
+  extractedChars?: number;
+  extractedTruncated?: boolean;
+  extractionStatus?: ExtractionStatus;
 }
 
 export interface TokenUsage {
