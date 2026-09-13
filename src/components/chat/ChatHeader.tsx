@@ -11,7 +11,9 @@ export function ChatHeader({
     <header className="chat-header">
       <div>
         <p className="brand">Chatbot V2</p>
-        <p className="model-line">{model || DEFAULT_NVIDIA_MODEL}</p>
+        <p className="model-line" title={model || DEFAULT_NVIDIA_MODEL}>
+          {model || DEFAULT_NVIDIA_MODEL}
+        </p>
       </div>
       <button type="button" className="ghost-btn" onClick={onNewChat}>
         New chat
