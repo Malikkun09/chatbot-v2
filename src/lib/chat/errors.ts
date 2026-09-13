@@ -13,6 +13,8 @@ const MESSAGES: Record<ErrorCategory, string> = {
   user_cancelled: "Generation stopped.",
   not_multimodal:
     "This model does not accept images. Switch to Nemotron Omni or Dots, or remove image attachments.",
+  pdf_unreadable:
+    "This PDF looks scanned, but page images could not be prepared. Retry with a smaller 1–2 page scan.",
   invalid_request: "The request was rejected. Check the prompt, files, or selected model.",
   model_unavailable: "That model is unavailable right now. Pick another model and retry.",
   context_limit: "This conversation is too long for the model. Start a new chat or shorten the last message.",

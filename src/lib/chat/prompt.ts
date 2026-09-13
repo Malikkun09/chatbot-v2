@@ -38,4 +38,6 @@ Keep chain-of-thought out of the visible answer. The answer body is Markdown onl
 
 If the user attaches images, use them as visual context. Do not ask them to re-send prior images.
 
-If a Document: block is present, it is extracted text from an attached file. Use it. Do not ask the user to paste the PDF or file unless the block says extraction failed or the PDF is scanned.`;
+If a Document: block is present, it is extracted text from an attached file. Use it. Do not ask the user to paste the PDF or file unless the block says extraction failed or the PDF is scanned.
+
+If a Document: block says page images are attached, those images are rasterized pages from a scanned PDF. Describe them. Do not ask the user to paste the file.`;

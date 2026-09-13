@@ -1,18 +1,43 @@
 import {
   MAX_EXTRACTED_TEXT_CHARS,
   MAX_TEXT_FILE_BYTES,
+  PDF_VISION_DEFAULT_PAGES,
 } from "@/lib/attachments/config";
 import { isPdfAttachment, isTextAttachment } from "@/lib/attachments/validate";
+import { errorMessage } from "@/lib/chat/errors";
 import type { ApiAttachment, ApiTurn } from "@/lib/chat/types";
 import { bytesToUtf8, decodeAttachmentBytes } from "@/lib/extract/bytes";
 import {
   capExtractedText,
   formatDocumentContext,
-  formatDocumentEmpty,
-  formatDocumentFailed,
+  formatDocumentVision,
 } from "@/lib/extract/format";
 import { extractPdfDataUrl } from "@/lib/extract/pdf";
-import type { DocumentReadInfo, PdfExtractStatus } from "@/lib/extract/types";
+import { pdfPageAttachmentName, renderPdfPageImages } from "@/lib/extract/render";
+import type {
+  DocumentReadInfo,
+  HydrationError,
+  PdfExtractStatus,
+  PdfRenderResult,
+} from "@/lib/extract/types";
+
+export type PageRenderer = (
+  bytes: Uint8Array,
+  options?: { maxPages?: number },
+) => Promise<PdfRenderResult>;
+
+export interface HydrateDocumentOptions {
+  renderPages?: PageRenderer;
+  onStatus?: (message: string) => void;
+  maxPages?: number;
+}
+
+export interface HydrateDocumentResult {
+  turns: ApiTurn[];
+  documents: DocumentReadInfo[];
+  visionPages: number;
+  error?: HydrationError;
+}
 
 export function needsDocumentHydration(turns: ApiTurn[]): boolean {
   return turns.some((turn) =>
@@ -32,7 +57,36 @@ function pdfReadMessage(status: PdfExtractStatus): string | undefined {
   return undefined;
 }
 
-async function hydratePdf(attachment: ApiAttachment): Promise<{ block: string; info: DocumentReadInfo }> {
+function visionFailure(name: string): HydrationError {
+  return {
+    category: "pdf_unreadable",
+    message: `${name}: ${errorMessage("pdf_unreadable")}`,
+  };
+}
+
+function pageImagesFromRender(
+  filename: string,
+  rendered: PdfRenderResult,
+): ApiAttachment[] {
+  return rendered.pages.map((page) => ({
+    name: pdfPageAttachmentName(filename, page.pageNumber),
+    mimeType: page.mimeType,
+    kind: "image" as const,
+    dataUrl: page.dataUrl,
+    source: "pdf-page" as const,
+    pageNumber: page.pageNumber,
+  }));
+}
+
+async function hydratePdf(
+  attachment: ApiAttachment,
+  options: HydrateDocumentOptions,
+): Promise<{
+  block: string;
+  info: DocumentReadInfo;
+  images: ApiAttachment[];
+  error?: HydrationError;
+}> {
   const result = await extractPdfDataUrl(attachment.dataUrl as string);
   if (result.status === "ok") {
     return {
@@ -45,20 +99,57 @@ async function hydratePdf(attachment: ApiAttachment): Promise<{ block: string; i
         truncated: result.truncated,
         text: result.text,
       },
+      images: [],
     };
   }
-  const block =
-    result.status === "empty"
-      ? formatDocumentEmpty(attachment.name)
-      : formatDocumentFailed(attachment.name);
+
+  options.onStatus?.("Reading scanned pages…");
+  let bytes: Uint8Array;
+  try {
+    bytes = decodeAttachmentBytes(attachment.dataUrl as string);
+  } catch {
+    return {
+      block: "",
+      info: {
+        name: attachment.name,
+        status: result.status,
+        pageCount: result.pageCount || undefined,
+        message: pdfReadMessage(result.status),
+      },
+      images: [],
+      error: visionFailure(attachment.name),
+    };
+  }
+
+  const renderPages = options.renderPages ?? renderPdfPageImages;
+  const rendered = await renderPages(bytes, {
+    maxPages: options.maxPages ?? PDF_VISION_DEFAULT_PAGES,
+  });
+  if (!rendered.pages.length) {
+    return {
+      block: "",
+      info: {
+        name: attachment.name,
+        status: result.status,
+        pageCount: rendered.pageCount || result.pageCount || undefined,
+        message: pdfReadMessage(result.status),
+      },
+      images: [],
+      error: visionFailure(attachment.name),
+    };
+  }
+
+  const images = pageImagesFromRender(attachment.name, rendered);
   return {
-    block,
+    block: formatDocumentVision(attachment.name, images.length, rendered.pageCount || result.pageCount),
     info: {
       name: attachment.name,
       status: result.status,
-      pageCount: result.pageCount || undefined,
+      pageCount: rendered.pageCount || result.pageCount,
       message: pdfReadMessage(result.status),
+      visionPages: images.length,
     },
+    images,
   };
 }
 
@@ -98,19 +189,31 @@ function hydrateTextPayload(attachment: ApiAttachment): { block: string; info: D
   };
 }
 
-async function hydrateTurn(turn: ApiTurn): Promise<{ turn: ApiTurn; documents: DocumentReadInfo[] }> {
+async function hydrateTurn(
+  turn: ApiTurn,
+  options: HydrateDocumentOptions,
+): Promise<{ turn: ApiTurn; documents: DocumentReadInfo[]; error?: HydrationError; visionPages: number }> {
   const attachments = turn.attachments ?? [];
-  if (attachments.length === 0) return { turn, documents: [] };
+  if (attachments.length === 0) return { turn, documents: [], visionPages: 0 };
 
   const blocks: string[] = [];
   const documents: DocumentReadInfo[] = [];
   const kept: ApiAttachment[] = [];
+  const pageImages: ApiAttachment[] = [];
+  let error: HydrationError | undefined;
+  let visionPages = 0;
 
   for (const attachment of attachments) {
     if (isPdfAttachment(attachment) && attachment.dataUrl) {
-      const { block, info } = await hydratePdf(attachment);
-      blocks.push(block);
-      documents.push(info);
+      const hydrated = await hydratePdf(attachment, options);
+      documents.push(hydrated.info);
+      if (hydrated.error) {
+        error ??= hydrated.error;
+        continue;
+      }
+      blocks.push(hydrated.block);
+      pageImages.push(...hydrated.images);
+      visionPages += hydrated.images.length;
       continue;
     }
     if (isTextAttachment(attachment) && (attachment.dataUrl || attachment.textContent)) {
@@ -125,30 +228,37 @@ async function hydrateTurn(turn: ApiTurn): Promise<{ turn: ApiTurn; documents: D
     }
     if (attachment.dataUrl && !isPdfAttachment(attachment)) {
       kept.push(attachment);
-      continue;
     }
   }
 
   const content = [...blocks, turn.content.trim()].filter(Boolean).join("\n\n");
+  const nextAttachments = [...kept, ...pageImages];
   return {
     turn: {
       ...turn,
       content,
-      attachments: kept.length ? kept : undefined,
+      attachments: nextAttachments.length ? nextAttachments : undefined,
     },
     documents,
+    error,
+    visionPages,
   };
 }
 
 export async function hydrateDocumentTurns(
   turns: ApiTurn[],
-): Promise<{ turns: ApiTurn[]; documents: DocumentReadInfo[] }> {
+  options: HydrateDocumentOptions = {},
+): Promise<HydrateDocumentResult> {
   const next: ApiTurn[] = [];
   const documents: DocumentReadInfo[] = [];
+  let error: HydrationError | undefined;
+  let visionPages = 0;
   for (const turn of turns) {
-    const hydrated = await hydrateTurn(turn);
+    const hydrated = await hydrateTurn(turn, options);
     next.push(hydrated.turn);
     documents.push(...hydrated.documents);
+    visionPages += hydrated.visionPages;
+    error ??= hydrated.error;
   }
-  return { turns: next, documents };
+  return { turns: next, documents, visionPages, error };
 }
