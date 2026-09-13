@@ -11,26 +11,39 @@ export type MessageStatus =
 export type ChatStatus = MessageStatus;
 
 export type ErrorCategory =
+  | "rate_limited"
+  | "temporary_provider_error"
   | "timeout"
-  | "rate_limit"
-  | "bad_key"
-  | "provider_down"
-  | "stream_drop"
-  | "payload_too_large"
   | "network"
-  | "cancelled"
+  | "auth"
+  | "invalid_request"
+  | "model_unavailable"
+  | "context_limit"
+  | "content_policy"
+  | "user_cancelled"
+  | "payload_too_large"
+  | "not_multimodal"
+  | "stream_drop"
   | "unknown";
+
+export type AttachmentKind = "image" | "text" | "document";
+export type AttachmentStatus = "pending" | "processing" | "ready" | "error";
 
 export interface Attachment {
   id: string;
+  kind: AttachmentKind;
   name: string;
   mimeType: string;
+  status: AttachmentStatus;
   dataUrl?: string;
+  textContent?: string;
+  previewUrl?: string;
   stub?: boolean;
   width?: number;
   height?: number;
   error?: string;
   sizeBytes?: number;
+  progress?: number;
 }
 
 export interface TokenUsage {
@@ -69,7 +82,9 @@ export interface ChatMessage {
 export interface ApiAttachment {
   name: string;
   mimeType: string;
+  kind?: AttachmentKind;
   dataUrl?: string;
+  textContent?: string;
 }
 
 export interface ApiTurn {
@@ -80,4 +95,5 @@ export interface ApiTurn {
 
 export interface ChatRequestBody {
   messages: ApiTurn[];
+  model?: string;
 }

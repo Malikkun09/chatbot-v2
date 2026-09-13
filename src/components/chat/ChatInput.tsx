@@ -1,33 +1,47 @@
 "use client";
 
 import { useId, useRef, type KeyboardEvent } from "react";
-import { CloseIcon, PaperclipIcon, SendIcon, StopIcon } from "@/components/icons";
+import { AttachmentTray } from "@/components/chat/AttachmentTray";
+import { PaperclipIcon, SendIcon, StopIcon } from "@/components/icons";
+import { FILE_INPUT_ACCEPT, MAX_ATTACHMENTS } from "@/lib/attachments/config";
 import type { Attachment, ChatStatus } from "@/lib/chat/types";
-import { MAX_ATTACHMENTS } from "@/lib/constants";
 
 export function ChatInput({
   draft,
   attachments,
   status,
+  visionBlocked,
   onDraftChange,
   onSend,
   onStop,
   onFiles,
   onRemoveAttachment,
+  onRetryAttachment,
+  onOpenImage,
+  onSwitchVisionModel,
+  onRemoveImages,
 }: {
   draft: string;
   attachments: Attachment[];
   status: ChatStatus;
+  visionBlocked: boolean;
   onDraftChange: (value: string) => void;
   onSend: () => void;
   onStop: () => void;
-  onFiles: (files: FileList | null) => void;
+  onFiles: (files: FileList | File[] | null) => void;
   onRemoveAttachment: (id: string) => void;
+  onRetryAttachment: (id: string) => void;
+  onOpenImage: (attachment: Attachment) => void;
+  onSwitchVisionModel: () => void;
+  onRemoveImages: () => void;
 }) {
   const fileId = useId();
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const busy = status === "submitting" || status === "streaming";
-  const canSend = (draft.trim().length > 0 || attachments.some((item) => item.dataUrl)) && !busy;
+  const processing = attachments.some((item) => item.status === "processing");
+  const ready = attachments.filter((item) => item.status === "ready");
+  const canSend =
+    (draft.trim().length > 0 || ready.length > 0) && !busy && !processing && !visionBlocked;
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey) return;
@@ -44,39 +58,35 @@ export function ChatInput({
         if (canSend) onSend();
       }}
     >
-      {attachments.length ? (
-        <ul className="composer-files">
-          {attachments.map((attachment) => (
-            <li key={attachment.id} className={attachment.error ? "file-error" : undefined}>
-              {attachment.dataUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={attachment.dataUrl} alt="" />
-              ) : (
-                <span className="file-ph" />
-              )}
-              <span className="file-name">{attachment.error || attachment.name}</span>
-              <button
-                type="button"
-                className="icon-btn"
-                aria-label={`Remove ${attachment.name}`}
-                onClick={() => onRemoveAttachment(attachment.id)}
-              >
-                <CloseIcon />
-              </button>
-            </li>
-          ))}
-        </ul>
+      <AttachmentTray
+        attachments={attachments}
+        onRemove={onRemoveAttachment}
+        onRetry={onRetryAttachment}
+        onOpenImage={onOpenImage}
+      />
+      {visionBlocked ? (
+        <div className="capability-banner" role="status">
+          <p>This model does not accept images. Switch to Nemotron Omni or Dots, or remove image attachments.</p>
+          <div className="capability-actions">
+            <button type="button" className="ghost-btn" onClick={onSwitchVisionModel}>
+              Use Omni
+            </button>
+            <button type="button" className="ghost-btn" onClick={onRemoveImages}>
+              Remove images
+            </button>
+          </div>
+        </div>
       ) : null}
       <div className="composer-row">
         <label className="icon-btn attach" htmlFor={fileId}>
           <PaperclipIcon />
-          <span className="sr-only">Attach image</span>
+          <span className="sr-only">Attach files</span>
         </label>
         <input
           id={fileId}
           className="sr-only"
           type="file"
-          accept="image/*"
+          accept={FILE_INPUT_ACCEPT}
           multiple
           disabled={busy || attachments.length >= MAX_ATTACHMENTS}
           onChange={(event) => {
@@ -104,7 +114,7 @@ export function ChatInput({
           </button>
         )}
       </div>
-      <p className="composer-hint">Enter to send · Shift+Enter for a new line</p>
+      <p className="composer-hint">Enter to send · Shift+Enter for a new line · paste or drop files</p>
     </form>
   );
 }

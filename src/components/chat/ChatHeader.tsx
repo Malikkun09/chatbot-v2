@@ -1,19 +1,23 @@
-import { DEFAULT_NVIDIA_MODEL } from "@/lib/constants";
+"use client";
+
+import { ModelPicker } from "@/components/chat/ModelPicker";
 
 export function ChatHeader({
-  model,
+  selectedModel,
+  onModelChange,
   onNewChat,
+  disabled,
 }: {
-  model?: string;
+  selectedModel: string;
+  onModelChange: (id: string) => void;
   onNewChat: () => void;
+  disabled?: boolean;
 }) {
   return (
     <header className="chat-header">
-      <div>
+      <div className="header-main">
         <p className="brand">Chatbot V2</p>
-        <p className="model-line" title={model || DEFAULT_NVIDIA_MODEL}>
-          {model || DEFAULT_NVIDIA_MODEL}
-        </p>
+        <ModelPicker value={selectedModel} onChange={onModelChange} disabled={disabled} />
       </div>
       <button type="button" className="ghost-btn" onClick={onNewChat}>
         New chat
