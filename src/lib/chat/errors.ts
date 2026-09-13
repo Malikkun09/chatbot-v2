@@ -50,7 +50,8 @@ function safeDetail(override?: string): string | undefined {
   if (!override) return undefined;
   const line = override.split("\n")[0]?.trim() ?? "";
   if (!line) return undefined;
-  if (/api[_-]?key|bearer\s+\S+/i.test(line)) return undefined;
+  if (/bearer\s+[a-z0-9._\-]+/i.test(line)) return undefined;
+  if (/\b(sk-|nvapi-|or-auth-)[a-z0-9\-_]{8,}/i.test(line)) return undefined;
   return line.slice(0, 240);
 }
 

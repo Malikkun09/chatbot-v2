@@ -32,6 +32,7 @@ describe("errorMessage", () => {
     expect(msg).not.toMatch(/at foo/);
     expect(msg.length).toBeLessThan(280);
     expect(makeError("unknown", "Error: boom\n    at foo.ts:12:3").message).not.toMatch(/at foo/);
+    expect(makeError("auth", errorMessage("auth", "openrouter")).message).toMatch(/OpenRouter/);
   });
 
   it("keeps auth copy provider-specific", () => {

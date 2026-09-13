@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { defaultVisionModel, getCatalogModel } from "@/lib/ai/catalog";
+import { defaultVisionModel, getCatalogModel, type ModelProviderId } from "@/lib/ai/catalog";
 import { MAX_ATTACHMENTS } from "@/lib/attachments/config";
 import { ingestFiles, revokePreview } from "@/lib/attachments/ingest";
 import { classifyFile, hasImageAttachments } from "@/lib/attachments/validate";
@@ -294,13 +294,15 @@ export function useChatController() {
     let usage: TokenUsage | undefined;
     let latency: MessageMetrics = {};
     let streamModel: string | undefined;
+    let streamProvider: ModelProviderId | undefined;
     let sawDelta = false;
 
     try {
       for await (const event of readSse(response.body)) {
         if (event.event === "meta") {
-          const meta = JSON.parse(event.data) as { model?: string };
+          const meta = JSON.parse(event.data) as { model?: string; provider?: ModelProviderId };
           streamModel = meta.model;
+          streamProvider = meta.provider;
           continue;
         }
         if (event.event === "status") {
@@ -365,7 +367,7 @@ export function useChatController() {
             message?: string;
             keepPartial?: boolean;
           };
-          const error = makeError(payload.category || "unknown", payload.message);
+          const error = makeError(payload.category || "unknown", payload.message, streamProvider);
           setStatus(isCancel(error.category) ? "cancelled" : "error");
           setConnectionNotice(null);
           return { error, usage, latency, model: streamModel, keep: true };
