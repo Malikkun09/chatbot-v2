@@ -3,6 +3,7 @@ import { classifyThrown, errorMessage, makeError } from "@/lib/chat/errors";
 import { estimatePayloadBytes, fitPayload, isPayloadTooLarge } from "@/lib/chat/context";
 import type { ApiTurn, ChatRequestBody, TokenUsage } from "@/lib/chat/types";
 import { getChatProvider } from "@/lib/ai/provider";
+import { hasImageAttachments } from "@/lib/attachments/validate";
 import { encodeSse } from "@/lib/ai/sse";
 import { logChat } from "@/lib/logger";
 
@@ -10,24 +11,15 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-function jsonError(status: number, category: ReturnType<typeof makeError>["category"]) {
-  const error = makeError(category);
-  return Response.json(
-    { error },
-    {
-      status,
-      headers: { "Cache-Control": "no-store" },
-    },
-  );
+function jsonError(status: number, category: Parameters<typeof makeError>[0], provider?: "openrouter" | "nvidia") {
+  const error = makeError(category, undefined, provider);
+  return Response.json({ error }, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 function isApiTurn(value: unknown): value is ApiTurn {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
-  return (
-    (record.role === "user" || record.role === "assistant") &&
-    typeof record.content === "string"
-  );
+  return (record.role === "user" || record.role === "assistant") && typeof record.content === "string";
 }
 
 export async function POST(request: Request) {
@@ -43,7 +35,7 @@ export async function POST(request: Request) {
   try {
     body = (await request.json()) as ChatRequestBody;
   } catch {
-    return jsonError(400, "unknown");
+    return jsonError(400, "invalid_request");
   }
 
   const rawBytes = estimatePayloadBytes(body);
@@ -53,6 +45,13 @@ export async function POST(request: Request) {
   }
 
   const incoming = Array.isArray(body.messages) ? body.messages.filter(isApiTurn) : [];
+  const { provider, model } = getChatProvider(typeof body.model === "string" ? body.model : undefined);
+
+  if (!model.multimodal && incoming.some((turn) => hasImageAttachments(turn.attachments))) {
+    logChat("error", { category: "not_multimodal", model: model.id });
+    return jsonError(400, "not_multimodal", model.provider);
+  }
+
   const fitted = fitPayload(
     incoming.map((turn, index) => ({
       id: `req_${index}`,
@@ -62,9 +61,12 @@ export async function POST(request: Request) {
       createdAt: Date.now(),
       attachments: turn.attachments?.map((attachment, attachmentIndex) => ({
         id: `att_${index}_${attachmentIndex}`,
+        kind: attachment.kind ?? (attachment.dataUrl ? "image" : "document"),
         name: attachment.name,
         mimeType: attachment.mimeType,
+        status: "ready" as const,
         dataUrl: attachment.dataUrl,
+        textContent: attachment.textContent,
       })),
     })),
   );
@@ -74,9 +76,9 @@ export async function POST(request: Request) {
     return jsonError(413, "payload_too_large");
   }
 
-  const provider = getChatProvider();
   logChat("start", {
-    model: provider.model,
+    model: model.id,
+    provider: model.provider,
     turns: fitted.turns.length,
     truncated: fitted.truncated,
     bytes: fitted.bytes,
@@ -85,7 +87,6 @@ export async function POST(request: Request) {
   const encoder = new TextEncoder();
   let ttftMs: number | undefined;
   let usage: TokenUsage | undefined;
-  let sawContent = false;
   const abort = new AbortController();
   const onAbort = () => abort.abort();
   request.signal.addEventListener("abort", onAbort);
@@ -96,28 +97,27 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(encodeSse(event, data)));
       };
 
-      send("meta", { model: provider.model });
+      send("meta", { model: model.id, provider: model.provider, label: model.label });
 
       try {
         for await (const event of provider.stream({
           messages: fitted.turns,
           signal: abort.signal,
         })) {
+          if (event.type === "status") {
+            send("status", { message: event.message });
+            continue;
+          }
           if (event.type === "thinking" || event.type === "content") {
             if (ttftMs === undefined) {
               ttftMs = Date.now() - started;
-              logChat("ttft", { model: provider.model, ttftMs });
+              logChat("ttft", { model: model.id, ttftMs });
             }
-            if (event.type === "content") sawContent = true;
             send(event.type, { delta: event.text });
             continue;
           }
           if (event.type === "tool_call") {
-            send("tool_call", {
-              id: event.id,
-              name: event.name,
-              arguments: event.arguments,
-            });
+            send("tool_call", { id: event.id, name: event.name, arguments: event.arguments });
             continue;
           }
           if (event.type === "usage") {
@@ -126,10 +126,11 @@ export async function POST(request: Request) {
             continue;
           }
           if (event.type === "error") {
-            logChat("error", { category: event.category, model: provider.model });
+            logChat("error", { category: event.category, model: model.id });
             send("error", {
               category: event.category,
-              message: event.message || errorMessage(event.category),
+              message: event.message || errorMessage(event.category, model.provider),
+              keepPartial: event.keepPartial,
             });
             controller.close();
             return;
@@ -137,17 +138,16 @@ export async function POST(request: Request) {
         }
 
         const durationMs = Date.now() - started;
-        const generationMs =
-          ttftMs !== undefined ? Math.max(0, durationMs - ttftMs) : durationMs;
+        const generationMs = ttftMs !== undefined ? Math.max(0, durationMs - ttftMs) : durationMs;
         logChat("done", {
-          model: provider.model,
+          model: model.id,
           durationMs,
           ttftMs,
           promptTokens: usage?.promptTokens,
           completionTokens: usage?.completionTokens,
         });
         send("done", {
-          model: provider.model,
+          model: model.id,
           durationMs,
           ttftMs,
           generationMs,
@@ -156,8 +156,8 @@ export async function POST(request: Request) {
         controller.close();
       } catch (error) {
         const category = classifyThrown(error);
-        logChat("error", { category, model: provider.model, sawContent });
-        send("error", { category, message: errorMessage(category) });
+        logChat("error", { category, model: model.id });
+        send("error", { category, message: errorMessage(category, model.provider) });
         controller.close();
       } finally {
         request.signal.removeEventListener("abort", onAbort);

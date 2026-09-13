@@ -1,5 +1,4 @@
-import type { ApiTurn, TokenUsage } from "@/lib/chat/types";
-import type { ErrorCategory } from "@/lib/chat/types";
+import type { ApiTurn, ErrorCategory, TokenUsage } from "@/lib/chat/types";
 
 export interface ProviderChatRequest {
   messages: ApiTurn[];
@@ -7,11 +6,12 @@ export interface ProviderChatRequest {
 }
 
 export type ProviderEvent =
+  | { type: "status"; message: string }
   | { type: "thinking"; text: string }
   | { type: "content"; text: string }
   | { type: "tool_call"; id?: string; name: string; arguments?: string }
   | { type: "usage"; usage: TokenUsage }
-  | { type: "error"; category: ErrorCategory; message?: string };
+  | { type: "error"; category: ErrorCategory; message?: string; keepPartial?: boolean };
 
 export interface ChatProvider {
   id: string;

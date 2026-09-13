@@ -1,27 +1,22 @@
 "use client";
 
-import { useEffect, useRef } from "react";
 import { ChatMessageView } from "@/components/chat/ChatMessage";
 import { EmptyState } from "@/components/chat/EmptyState";
-import type { ChatMessage } from "@/lib/chat/types";
+import type { Attachment, ChatMessage } from "@/lib/chat/types";
 
 export function ChatMessages({
   messages,
   toolCalls,
   onRetry,
   onSuggestion,
+  onOpenImage,
 }: {
   messages: ChatMessage[];
   toolCalls: Record<string, Array<{ id?: string; name: string; arguments?: string }>>;
   onRetry: () => void;
   onSuggestion: (prompt: string) => void;
+  onOpenImage: (attachment: Attachment) => void;
 }) {
-  const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [messages]);
-
   if (messages.length === 0) {
     return (
       <div className="messages-pane">
@@ -40,9 +35,9 @@ export function ChatMessages({
           message={message}
           toolCalls={toolCalls[message.id]}
           onRetry={message.id === lastAssistant?.id ? onRetry : undefined}
+          onOpenImage={onOpenImage}
         />
       ))}
-      <div ref={endRef} />
     </div>
   );
 }

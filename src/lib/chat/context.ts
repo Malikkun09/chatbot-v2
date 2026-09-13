@@ -1,3 +1,4 @@
+import { mergeAttachmentText } from "@/lib/attachments/ingest";
 import {
   MAX_REQUEST_BYTES,
   RECENT_MESSAGE_COUNT,
@@ -44,22 +45,32 @@ export function toApiTurns(messages: ChatMessage[]): ApiTurn[] {
     const allowImages = message.role === "user" && index === lastUser;
     const stubs =
       !allowImages && message.attachments?.length
-        ? message.attachments.map((attachment) => `[Attached image: ${attachment.name}]`).join(" ")
+        ? message.attachments.map((attachment) => `[Attached ${attachment.kind ?? "file"}: ${attachment.name}]`).join(" ")
         : "";
-    const content = [message.content, stubs].filter(Boolean).join("\n\n").trim();
+    const content = allowImages
+      ? mergeAttachmentText(message.content, message.attachments ?? [])
+      : [message.content, stubs].filter(Boolean).join("\n\n").trim();
+
+    const imageAttachments = allowImages
+      ? message.attachments
+          ?.filter(
+            (attachment) =>
+              attachment.kind === "image" &&
+              attachment.dataUrl &&
+              !attachment.stub,
+          )
+          .map((attachment) => ({
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            kind: attachment.kind,
+            dataUrl: attachment.dataUrl,
+          }))
+      : undefined;
 
     return {
       role: message.role === "assistant" ? "assistant" : "user",
       content,
-      attachments: allowImages
-        ? message.attachments
-            ?.filter((attachment) => attachment.dataUrl && !attachment.stub)
-            .map((attachment) => ({
-              name: attachment.name,
-              mimeType: attachment.mimeType,
-              dataUrl: attachment.dataUrl,
-            }))
-        : undefined,
+      attachments: imageAttachments?.length ? imageAttachments : undefined,
     };
   });
 }

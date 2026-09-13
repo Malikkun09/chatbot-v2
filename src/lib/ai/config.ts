@@ -2,6 +2,12 @@ import {
   DEFAULT_NVIDIA_BASE_URL,
   DEFAULT_NVIDIA_MODEL,
 } from "@/lib/constants";
+import {
+  DEFAULT_OPENROUTER_APP_NAME,
+  DEFAULT_OPENROUTER_BASE_URL,
+  DEFAULT_OPENROUTER_SITE_URL,
+} from "@/lib/ai/constants";
+import { parseKeys } from "@/lib/ai/keys";
 
 export function nvidiaBaseUrl(): string {
   const raw = process.env.NVIDIA_BASE_URL?.trim() || DEFAULT_NVIDIA_BASE_URL;
@@ -13,16 +19,23 @@ export function nvidiaModel(): string {
 }
 
 export function nvidiaKeys(): string[] {
-  const fromList =
-    process.env.NVIDIA_API_KEYS?.split(",")
-      .map((item) => item.trim())
-      .filter(Boolean) ?? [];
-  const primary = process.env.NVIDIA_API_KEY?.trim();
-  const keys = [...fromList];
-  if (primary && !keys.includes(primary)) keys.unshift(primary);
-  return keys;
+  return parseKeys(process.env.NVIDIA_API_KEY, process.env.NVIDIA_API_KEYS);
 }
 
-export function shouldFailover(status: number): boolean {
-  return status === 401 || status === 403 || status === 429 || (status >= 500 && status <= 504);
+export function openrouterBaseUrl(): string {
+  const raw = process.env.OPENROUTER_BASE_URL?.trim() || DEFAULT_OPENROUTER_BASE_URL;
+  return raw.replace(/\/+$/, "");
+}
+
+export function openrouterKeys(): string[] {
+  return parseKeys(process.env.OPENROUTER_API_KEY, process.env.OPENROUTER_API_KEYS);
+}
+
+export function openrouterHeaders(): Record<string, string> {
+  const referer = process.env.OPENROUTER_SITE_URL?.trim() || DEFAULT_OPENROUTER_SITE_URL;
+  const title = process.env.OPENROUTER_APP_NAME?.trim() || DEFAULT_OPENROUTER_APP_NAME;
+  return {
+    "HTTP-Referer": referer,
+    "X-Title": title,
+  };
 }

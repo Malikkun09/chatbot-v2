@@ -1,20 +1,27 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { MAX_ATTACHMENTS, MAX_REQUEST_BYTES } from "@/lib/constants";
+import { defaultVisionModel, getCatalogModel } from "@/lib/ai/catalog";
+import { MAX_ATTACHMENTS } from "@/lib/attachments/config";
+import { ingestFiles, revokePreview } from "@/lib/attachments/ingest";
+import { classifyFile, hasImageAttachments } from "@/lib/attachments/validate";
+import { MAX_REQUEST_BYTES } from "@/lib/constants";
 import { classifyHttpStatus, classifyThrown, makeError } from "@/lib/chat/errors";
 import { fitPayload } from "@/lib/chat/context";
+import { loadSelectedModel, saveSelectedModel } from "@/lib/chat/model-preference";
 import { clearSession, loadSession, saveSession } from "@/lib/chat/session";
 import type {
   Attachment,
   ChatMessage,
   ChatStatus,
+  ErrorCategory,
   MessageMetrics,
   TokenUsage,
 } from "@/lib/chat/types";
 import { readSse } from "@/lib/ai/sse";
-import { canAddAttachments, compressImageFile } from "@/lib/images/compress";
 import { createId } from "@/lib/id";
+
+const LIMIT_ID = "attachment-limit";
 
 type ToolCall = { id?: string; name: string; arguments?: string };
 
@@ -39,21 +46,34 @@ function useIsClient() {
   );
 }
 
+function isCancel(category: ErrorCategory): boolean {
+  return category === "user_cancelled";
+}
+
+function readyAttachments(items: Attachment[]): Attachment[] {
+  return items.filter((item) => item.status === "ready" && item.id !== LIMIT_ID);
+}
+
 export function useChatController() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  const [model, setModel] = useState<string | undefined>();
+  const [selectedModel, setSelectedModel] = useState(loadSelectedModel);
+  const [connectionNotice, setConnectionNotice] = useState<string | null>(null);
   const [toolCalls, setToolCalls] = useState<Record<string, ToolCall[]>>({});
   const [hydrated, setHydrated] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const messagesRef = useRef(messages);
+  const attachmentsRef = useRef(attachments);
+  const originalsRef = useRef(new Map<string, File>());
+  const selectedModelRef = useRef(selectedModel);
   const isClient = useIsClient();
 
   if (isClient && !hydrated) {
     setHydrated(true);
     setMessages(loadSession());
+    setSelectedModel(loadSelectedModel());
   }
 
   useEffect(() => {
@@ -61,8 +81,32 @@ export function useChatController() {
   }, [messages]);
 
   useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => {
+    selectedModelRef.current = selectedModel;
+  }, [selectedModel]);
+
+  useEffect(() => {
     if (hydrated) saveSession(messages);
   }, [messages, hydrated]);
+
+  useEffect(() => {
+    return () => {
+      for (const item of attachmentsRef.current) revokePreview(item.previewUrl);
+    };
+  }, []);
+
+  const selectModel = useCallback((id: string) => {
+    const next = getCatalogModel(id).id;
+    setSelectedModel(next);
+    saveSelectedModel(next);
+  }, []);
+
+  const switchToVisionModel = useCallback(() => {
+    selectModel(defaultVisionModel().id);
+  }, [selectModel]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -71,40 +115,133 @@ export function useChatController() {
   const newChat = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
+    for (const item of attachmentsRef.current) revokePreview(item.previewUrl);
+    originalsRef.current.clear();
     setMessages([]);
     setDraft("");
     setAttachments([]);
     setToolCalls({});
     setStatus("idle");
+    setConnectionNotice(null);
     clearSession();
   }, []);
 
-  const addFiles = useCallback(async (files: FileList | null) => {
-    if (!files?.length) return;
+  const addFiles = useCallback(async (files: FileList | File[] | null) => {
+    if (!files || (files instanceof FileList && !files.length) || (Array.isArray(files) && !files.length)) {
+      return;
+    }
     const incoming = Array.from(files);
-    setAttachments((current) => {
-      if (!canAddAttachments(current.length, incoming.length)) {
-        return [
-          ...current,
-          {
-            id: createId(),
-            name: "limit",
-            mimeType: "application/octet-stream",
-            error: `You can attach up to ${MAX_ATTACHMENTS} images.`,
-          },
-        ].slice(0, MAX_ATTACHMENTS + 1);
-      }
-      return current;
+    const usable = attachmentsRef.current.filter((item) => item.id !== LIMIT_ID);
+    const space = Math.max(0, MAX_ATTACHMENTS - usable.length);
+    const take = incoming.slice(0, space);
+    const overflow = incoming.length > take.length;
+    const batch = take.map((file) => {
+      const classified = classifyFile(file);
+      const id = createId();
+      originalsRef.current.set(id, file);
+      const previewUrl =
+        classified.kind === "image" && !classified.error ? URL.createObjectURL(file) : undefined;
+      const placeholder: Attachment = {
+        id,
+        kind: classified.kind,
+        name: file.name,
+        mimeType: file.type || "application/octet-stream",
+        status: classified.error ? "error" : "processing",
+        error: classified.error,
+        sizeBytes: file.size,
+        previewUrl,
+        progress: classified.error ? undefined : 0.2,
+      };
+      return { file, placeholder };
     });
-    const compressed = await Promise.all(incoming.map((file) => compressImageFile(file)));
-    setAttachments((current) => {
-      const usable = current.filter((item) => item.name !== "limit");
-      return [...usable, ...compressed].slice(0, MAX_ATTACHMENTS);
-    });
+
+    setAttachments([
+      ...usable,
+      ...batch.map((item) => item.placeholder),
+      ...(overflow
+        ? [
+            {
+              id: LIMIT_ID,
+              kind: "document" as const,
+              name: "limit",
+              mimeType: "application/octet-stream",
+              status: "error" as const,
+              error: `You can attach up to ${MAX_ATTACHMENTS} files.`,
+            },
+          ]
+        : []),
+    ]);
+
+    const pending = batch.filter((item) => item.placeholder.status === "processing");
+    const ingested = await Promise.all(
+      pending.map(async ({ file, placeholder }) => {
+        const [result] = await ingestFiles([file]);
+        return { id: placeholder.id, previewUrl: placeholder.previewUrl, result };
+      }),
+    );
+
+    setAttachments((current) =>
+      current.map((item) => {
+        const found = ingested.find((entry) => entry.id === item.id);
+        if (!found?.result) return item;
+        if (item.previewUrl && found.result.status === "ready") {
+          revokePreview(item.previewUrl);
+        }
+        return {
+          ...found.result,
+          id: item.id,
+          previewUrl: found.result.status === "ready" ? undefined : found.result.previewUrl || item.previewUrl,
+          progress: found.result.status === "ready" ? 1 : item.progress,
+        };
+      }),
+    );
   }, []);
 
   const removeAttachment = useCallback((id: string) => {
-    setAttachments((current) => current.filter((item) => item.id !== id));
+    setAttachments((current) => {
+      const target = current.find((item) => item.id === id);
+      revokePreview(target?.previewUrl);
+      originalsRef.current.delete(id);
+      return current.filter((item) => item.id !== id);
+    });
+  }, []);
+
+  const retryAttachment = useCallback(async (id: string) => {
+    const file = originalsRef.current.get(id);
+    if (!file) return;
+    setAttachments((current) =>
+      current.map((item) =>
+        item.id === id
+          ? { ...item, status: "processing", error: undefined, progress: 0.2 }
+          : item,
+      ),
+    );
+    const [result] = await ingestFiles([file]);
+    if (!result) return;
+    setAttachments((current) =>
+      current.map((item) => {
+        if (item.id !== id) return item;
+        if (item.previewUrl && result.status === "ready") revokePreview(item.previewUrl);
+        return {
+          ...result,
+          id,
+          previewUrl: result.status === "ready" ? undefined : result.previewUrl || item.previewUrl,
+          progress: result.status === "ready" ? 1 : 0.2,
+        };
+      }),
+    );
+  }, []);
+
+  const removeImages = useCallback(() => {
+    setAttachments((current) => {
+      for (const item of current) {
+        if (item.kind === "image") {
+          revokePreview(item.previewUrl);
+          originalsRef.current.delete(item.id);
+        }
+      }
+      return current.filter((item) => item.kind !== "image");
+    });
   }, []);
 
   const sendMessages = useCallback(async (history: ChatMessage[]) => {
@@ -116,18 +253,19 @@ export function useChatController() {
     const controller = new AbortController();
     abortRef.current = controller;
     setStatus("submitting");
+    setConnectionNotice(null);
 
     let response: Response;
     try {
       response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: turns }),
+        body: JSON.stringify({ messages: turns, model: selectedModelRef.current }),
         signal: controller.signal,
       });
     } catch (error) {
       const category = classifyThrown(error);
-      setStatus(category === "cancelled" ? "cancelled" : "error");
+      setStatus(isCancel(category) ? "cancelled" : "error");
       return { error: makeError(category) };
     }
 
@@ -135,10 +273,10 @@ export function useChatController() {
     if (!response.ok || !contentType.includes("text/event-stream")) {
       let category = classifyHttpStatus(response.status);
       try {
-        const payload = (await response.json()) as { error?: { category?: string; message?: string } };
-        if (payload.error?.category) {
-          category = payload.error.category as typeof category;
-        }
+        const payload = (await response.json()) as {
+          error?: { category?: ErrorCategory; message?: string };
+        };
+        if (payload.error?.category) category = payload.error.category;
         setStatus("error");
         return { error: makeError(category, payload.error?.message) };
       } catch {
@@ -163,11 +301,16 @@ export function useChatController() {
         if (event.event === "meta") {
           const meta = JSON.parse(event.data) as { model?: string };
           streamModel = meta.model;
-          if (meta.model) setModel(meta.model);
+          continue;
+        }
+        if (event.event === "status") {
+          const payload = JSON.parse(event.data) as { message?: string };
+          if (payload.message) setConnectionNotice(payload.message);
           continue;
         }
         if (event.event === "thinking") {
           sawDelta = true;
+          setConnectionNotice(null);
           const payload = JSON.parse(event.data) as { delta?: string };
           const delta = payload.delta ?? "";
           setMessages((current) =>
@@ -185,6 +328,7 @@ export function useChatController() {
         }
         if (event.event === "content") {
           sawDelta = true;
+          setConnectionNotice(null);
           const payload = JSON.parse(event.data) as { delta?: string };
           const delta = payload.delta ?? "";
           setMessages((current) =>
@@ -216,13 +360,15 @@ export function useChatController() {
           continue;
         }
         if (event.event === "error") {
-          const payload = JSON.parse(event.data) as { category?: string; message?: string };
-          const error = makeError(
-            (payload.category as ReturnType<typeof makeError>["category"]) || "unknown",
-            payload.message,
-          );
-          setStatus(error.category === "cancelled" ? "cancelled" : "error");
-          return { error, usage, latency, model: streamModel, keep: true };
+          const payload = JSON.parse(event.data) as {
+            category?: ErrorCategory;
+            message?: string;
+            keepPartial?: boolean;
+          };
+          const error = makeError(payload.category || "unknown", payload.message);
+          setStatus(isCancel(error.category) ? "cancelled" : "error");
+          setConnectionNotice(null);
+          return { error, usage, latency, model: streamModel, keep: payload.keepPartial || sawDelta };
         }
         if (event.event === "done") {
           const done = JSON.parse(event.data) as DoneEvent;
@@ -234,30 +380,35 @@ export function useChatController() {
             generationMs: done.generationMs,
             tokensPerSecond: tokensPerSecond(usage, done.generationMs),
           };
-          if (done.model) setModel(done.model);
         }
       }
     } catch (error) {
       const category = classifyThrown(error);
-      setStatus(category === "cancelled" ? "cancelled" : "error");
-      return { error: makeError(category), usage, latency, model: streamModel, keep: true };
+      setStatus(isCancel(category) ? "cancelled" : "error");
+      setConnectionNotice(null);
+      return { error: makeError(category), usage, latency, model: streamModel, keep: sawDelta };
     }
 
     if (!sawDelta) {
       setStatus("error");
+      setConnectionNotice(null);
       return { error: makeError("stream_drop"), keep: true };
     }
 
     setStatus("completed");
+    setConnectionNotice(null);
     return { usage, latency, model: streamModel, keep: true };
   }, []);
 
   const send = useCallback(
     async (text?: string, files?: Attachment[]) => {
       const content = (text ?? draft).trim();
-      const nextAttachments = (files ?? attachments).filter((item) => item.dataUrl || item.error);
-      const validAttachments = nextAttachments.filter((item) => item.dataUrl);
-      if (!content && validAttachments.length === 0) return;
+      const nextAttachments = readyAttachments(files ?? attachments);
+      const catalog = getCatalogModel(selectedModelRef.current);
+      if (hasImageAttachments(nextAttachments) && !catalog.multimodal) {
+        return;
+      }
+      if (!content && nextAttachments.length === 0) return;
 
       const previous = messagesRef.current;
       const userMessage: ChatMessage = {
@@ -266,7 +417,7 @@ export function useChatController() {
         content,
         status: "completed",
         createdAt: Date.now(),
-        attachments: validAttachments,
+        attachments: nextAttachments,
       };
       const assistantMessage: ChatMessage = {
         id: createId(),
@@ -278,6 +429,11 @@ export function useChatController() {
       const history = [...previous, userMessage];
       setMessages([...history, assistantMessage]);
       setDraft("");
+      for (const item of attachmentsRef.current) {
+        if (!nextAttachments.some((attachment) => attachment.id === item.id)) {
+          revokePreview(item.previewUrl);
+        }
+      }
       setAttachments([]);
 
       const result = await sendMessages(history);
@@ -295,7 +451,7 @@ export function useChatController() {
           if (result.error) {
             return {
               ...message,
-              status: result.error.category === "cancelled" ? "cancelled" : "error",
+              status: isCancel(result.error.category) ? "cancelled" : "error",
               error: result.error,
               usage: result.usage,
               latency: result.latency,
@@ -322,25 +478,42 @@ export function useChatController() {
     if (next[next.length - 1]?.role === "assistant") next = next.slice(0, -1);
     const lastUser = [...next].reverse().find((message) => message.role === "user");
     if (!lastUser) return;
+    if (
+      hasImageAttachments(lastUser.attachments) &&
+      !getCatalogModel(selectedModelRef.current).multimodal
+    ) {
+      setAttachments(lastUser.attachments ?? []);
+      setDraft(lastUser.content);
+      return;
+    }
     const base = next.filter((message) => message.id !== lastUser.id);
     messagesRef.current = base;
     setMessages(base);
     void send(lastUser.content, lastUser.attachments);
   }, [send]);
 
+  const visionBlocked =
+    hasImageAttachments(attachments) && !getCatalogModel(selectedModel).multimodal;
+
   return {
     messages,
     status,
     draft,
     attachments,
-    model,
+    selectedModel,
+    connectionNotice,
+    visionBlocked,
     toolCalls,
     setDraft,
+    selectModel,
+    switchToVisionModel,
     send,
     stop,
     retry,
     newChat,
     addFiles,
     removeAttachment,
+    retryAttachment,
+    removeImages,
   };
 }

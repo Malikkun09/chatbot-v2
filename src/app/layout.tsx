@@ -16,7 +16,7 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://chatbot.malikfajar.me"),
   title: "Chatbot V2",
   description:
-    "Standalone AI chatbot by Muhammad Malik Fajar. Streaming answers from NVIDIA NIM with secure Markdown rendering.",
+    "Standalone AI chatbot by Muhammad Malik Fajar. Streaming answers from OpenRouter and NVIDIA NIM with secure Markdown rendering.",
   applicationName: "Chatbot V2",
   authors: [{ name: "Muhammad Malik Fajar", url: "https://github.com/Malikkun09" }],
   robots: { index: true, follow: true },

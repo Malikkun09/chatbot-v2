@@ -37,6 +37,8 @@ describe("context trim", () => {
             id: "1",
             name: "old.png",
             mimeType: "image/png",
+            kind: "image",
+            status: "ready",
             dataUrl: `data:image/png;base64,${"A".repeat(2000)}`,
           },
         ],
@@ -50,6 +52,8 @@ describe("context trim", () => {
             id: "2",
             name: "new.jpg",
             mimeType: "image/jpeg",
+            kind: "image",
+            status: "ready",
             dataUrl: "data:image/jpeg;base64,BBB",
           },
         ],
@@ -61,6 +65,37 @@ describe("context trim", () => {
     expect(turns[2]?.attachments?.[0]?.dataUrl).toContain("BBB");
   });
 
+  it("inlines last-user text files and does not claim PDF vision", () => {
+    const messages: ChatMessage[] = [
+      msg({
+        role: "user",
+        content: "read these",
+        attachments: [
+          {
+            id: "t",
+            kind: "text",
+            status: "ready",
+            name: "notes.txt",
+            mimeType: "text/plain",
+            textContent: "alpha beta",
+          },
+          {
+            id: "d",
+            kind: "document",
+            status: "ready",
+            name: "brief.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 1200,
+          },
+        ],
+      }),
+    ];
+    const turns = toApiTurns(messages);
+    expect(turns[0]?.content).toContain("alpha beta");
+    expect(turns[0]?.content).toMatch(/binary is not sent/i);
+    expect(turns[0]?.attachments).toBeUndefined();
+  });
+
   it("fits oversized payloads under the function limit", () => {
     const huge = `data:image/jpeg;base64,${"B".repeat(800_000)}`;
     const messages: ChatMessage[] = Array.from({ length: 20 }, (_, index) =>
@@ -69,7 +104,7 @@ describe("context trim", () => {
         content: "n".repeat(50_000),
         attachments:
           index % 2 === 0
-            ? [{ id: String(index), name: "pic.jpg", mimeType: "image/jpeg", dataUrl: huge }]
+            ? [{ id: String(index), kind: "image", status: "ready", name: "pic.jpg", mimeType: "image/jpeg", dataUrl: huge }]
             : undefined,
       }),
     );

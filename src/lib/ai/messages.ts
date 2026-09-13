@@ -2,7 +2,7 @@ import { SYSTEM_PROMPT } from "@/lib/chat/prompt";
 import type { ApiTurn } from "@/lib/chat/types";
 import type { NvidiaChatMessage, NvidiaContentPart } from "@/lib/ai/types";
 
-export function toNvidiaMessages(turns: ApiTurn[]): NvidiaChatMessage[] {
+export function toChatCompletionsMessages(turns: ApiTurn[]): NvidiaChatMessage[] {
   const messages: NvidiaChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
 
   for (const turn of turns) {
@@ -18,9 +18,7 @@ export function toNvidiaMessages(turns: ApiTurn[]): NvidiaChatMessage[] {
     }
 
     const parts: NvidiaContentPart[] = [];
-    if (turn.content.trim()) {
-      parts.push({ type: "text", text: turn.content });
-    }
+    if (turn.content.trim()) parts.push({ type: "text", text: turn.content });
     for (const image of images) {
       parts.push({ type: "image_url", image_url: { url: image.dataUrl as string } });
     }
@@ -29,3 +27,6 @@ export function toNvidiaMessages(turns: ApiTurn[]): NvidiaChatMessage[] {
 
   return messages;
 }
+
+/** @deprecated use toChatCompletionsMessages */
+export const toNvidiaMessages = toChatCompletionsMessages;

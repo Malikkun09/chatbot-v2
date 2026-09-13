@@ -1,10 +1,9 @@
 import {
   IMAGE_QUALITY,
-  MAX_ATTACHMENTS,
   MAX_COMPRESSED_IMAGE_BYTES,
   MAX_IMAGE_EDGE,
   MAX_SOURCE_IMAGE_BYTES,
-} from "@/lib/constants";
+} from "@/lib/attachments/config";
 import type { Attachment } from "@/lib/chat/types";
 import { createId } from "@/lib/id";
 
@@ -40,29 +39,30 @@ async function encode(
       return { blob: webp, mimeType: "image/webp" };
     }
   } catch {
-    // fall through to jpeg
+    // jpeg fallback
   }
   const jpeg = await canvasToBlob(canvas, "image/jpeg", quality);
   return { blob: jpeg, mimeType: "image/jpeg" };
 }
 
-export async function compressImageFile(file: File): Promise<Attachment> {
-  if (!file.type.startsWith("image/")) {
-    return {
-      id: createId(),
-      name: file.name,
-      mimeType: file.type || "application/octet-stream",
-      error: "Only image files can be attached.",
-    };
-  }
+function fail(file: File, error: string, extra: Partial<Attachment> = {}): Attachment {
+  return {
+    id: createId(),
+    kind: "image",
+    name: file.name,
+    mimeType: file.type || "application/octet-stream",
+    status: "error",
+    error,
+    ...extra,
+  };
+}
 
+export async function compressImageFile(file: File): Promise<Attachment> {
+  if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(file.name)) {
+    return fail(file, "Only image files can be compressed here.");
+  }
   if (file.size > MAX_SOURCE_IMAGE_BYTES) {
-    return {
-      id: createId(),
-      name: file.name,
-      mimeType: file.type,
-      error: "Image is too large to attach (max 12MB before compression).",
-    };
+    return fail(file, "Image is too large to attach (max 12MB before compression).", { sizeBytes: file.size });
   }
 
   try {
@@ -76,12 +76,7 @@ export async function compressImageFile(file: File): Promise<Attachment> {
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       bitmap.close();
-      return {
-        id: createId(),
-        name: file.name,
-        mimeType: file.type,
-        error: "Could not compress this image in the browser.",
-      };
+      return fail(file, "Could not compress this image in the browser.");
     }
     ctx.drawImage(bitmap, 0, 0, width, height);
     bitmap.close();
@@ -94,34 +89,22 @@ export async function compressImageFile(file: File): Promise<Attachment> {
     }
 
     if (encoded.blob.size > MAX_COMPRESSED_IMAGE_BYTES) {
-      return {
-        id: createId(),
-        name: file.name,
-        mimeType: file.type,
-        error: "Compressed image is still too large. Try a smaller photo.",
-      };
+      return fail(file, "Compressed image is still too large. Try a smaller photo.");
     }
 
     const dataUrl = await blobToDataUrl(encoded.blob);
     return {
       id: createId(),
+      kind: "image",
       name: file.name,
       mimeType: encoded.mimeType,
+      status: "ready",
       dataUrl,
       width,
       height,
       sizeBytes: encoded.blob.size,
     };
   } catch {
-    return {
-      id: createId(),
-      name: file.name,
-      mimeType: file.type,
-      error: "Could not read or compress this image.",
-    };
+    return fail(file, "Could not read or compress this image.");
   }
-}
-
-export function canAddAttachments(currentCount: number, incomingCount: number): boolean {
-  return currentCount + incomingCount <= MAX_ATTACHMENTS;
 }
