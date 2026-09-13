@@ -11,6 +11,7 @@ import { clipboardImages, dataTransferFiles } from "@/lib/attachments/ingest";
 import type { Attachment } from "@/lib/chat/types";
 
 function viewerSrc(attachment: Attachment): string | undefined {
+  if (attachment.kind !== "image") return undefined;
   return attachment.previewUrl || attachment.dataUrl;
 }
 

@@ -65,7 +65,7 @@ describe("context trim", () => {
     expect(turns[2]?.attachments?.[0]?.dataUrl).toContain("BBB");
   });
 
-  it("inlines last-user text files and does not claim PDF vision", () => {
+  it("sends last-user PDF bytes for server extraction and inlines text files", () => {
     const messages: ChatMessage[] = [
       msg({
         role: "user",
@@ -86,14 +86,16 @@ describe("context trim", () => {
             name: "brief.pdf",
             mimeType: "application/pdf",
             sizeBytes: 1200,
+            dataUrl: "data:application/pdf;base64,JVBERi0x",
           },
         ],
       }),
     ];
     const turns = toApiTurns(messages);
     expect(turns[0]?.content).toContain("alpha beta");
-    expect(turns[0]?.content).toMatch(/binary is not sent/i);
-    expect(turns[0]?.attachments).toBeUndefined();
+    expect(turns[0]?.content).not.toMatch(/binary is not sent/i);
+    expect(turns[0]?.attachments?.some((item) => item.mimeType === "application/pdf")).toBe(true);
+    expect(turns[0]?.attachments?.every((item) => item.kind !== "image")).toBe(true);
   });
 
   it("fits oversized payloads under the function limit", () => {

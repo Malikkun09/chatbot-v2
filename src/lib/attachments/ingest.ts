@@ -1,5 +1,10 @@
 import { MAX_ATTACHMENTS } from "@/lib/attachments/config";
-import { classifyFile } from "@/lib/attachments/validate";
+import { classifyFile, isPdfAttachment } from "@/lib/attachments/validate";
+import {
+  formatDocumentContext,
+  formatDocumentEmpty,
+  formatDocumentFailed,
+} from "@/lib/extract/format";
 import { compressImageFile } from "@/lib/images/compress";
 import type { Attachment } from "@/lib/chat/types";
 import { createId } from "@/lib/id";
@@ -22,7 +27,33 @@ export function formatSize(bytes?: number): string {
 
 export function documentStub(attachment: Attachment): string {
   const size = formatSize(attachment.sizeBytes);
-  return `[Attached file: ${attachment.name} (${attachment.mimeType}${size ? `, ${size}` : ""}) — binary is not sent to the model. Paste or export text if you need it read.]`;
+  const detail = `${attachment.mimeType}${size ? `, ${size}` : ""}`;
+  if (isPdfAttachment(attachment)) {
+    return `[Attached PDF: ${attachment.name} (${detail}) — re-attach the file so it can be read.]`;
+  }
+  return `[Attached file: ${attachment.name} (${detail}) — this file type is not parsed. Export to PDF or paste the text.]`;
+}
+
+export function pdfContextBlock(attachment: Attachment): string {
+  if (attachment.extractionStatus === "empty") return formatDocumentEmpty(attachment.name);
+  if (attachment.extractionStatus === "failed") return formatDocumentFailed(attachment.name);
+  const body = attachment.textContent?.trim() ?? "";
+  if (body) return formatDocumentContext(attachment.name, body);
+  return "";
+}
+
+export async function fileToDataUrl(file: File): Promise<string> {
+  if (typeof FileReader !== "undefined") {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error("Could not read this file."));
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsDataURL(file);
+    });
+  }
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const mime = file.type || (isPdfAttachment({ name: file.name, mimeType: file.type }) ? "application/pdf" : "application/octet-stream");
+  return `data:${mime};base64,${Buffer.from(bytes).toString("base64")}`;
 }
 
 export function textFence(attachment: Attachment): string {
@@ -34,9 +65,14 @@ export function mergeAttachmentText(base: string, attachments: Attachment[]): st
   const extras: string[] = [];
   for (const attachment of attachments) {
     if (attachment.kind === "text" && attachment.textContent) extras.push(textFence(attachment));
+    if (isPdfAttachment(attachment)) {
+      const block = pdfContextBlock(attachment);
+      if (block) extras.push(block);
+      continue;
+    }
     if (attachment.kind === "document") extras.push(documentStub(attachment));
   }
-  return [base.trim(), ...extras].filter(Boolean).join("\n\n");
+  return [...extras, base.trim()].filter(Boolean).join("\n\n");
 }
 
 export function revokePreview(url?: string): void {
@@ -95,11 +131,38 @@ export async function ingestFiles(files: File[]): Promise<Attachment[]> {
       }
       continue;
     }
+    const isPdf = isPdfAttachment({ name: file.name, mimeType: file.type });
+    const mimeType = isPdf ? "application/pdf" : file.type || "application/octet-stream";
+    if (isPdf) {
+      try {
+        const dataUrl = await fileToDataUrl(file);
+        results.push({
+          id: createId(),
+          kind: "document",
+          name: file.name,
+          mimeType,
+          status: "ready",
+          dataUrl,
+          sizeBytes: file.size,
+        });
+      } catch {
+        results.push({
+          id: createId(),
+          kind: "document",
+          name: file.name,
+          mimeType,
+          status: "error",
+          error: "Could not read this PDF.",
+          sizeBytes: file.size,
+        });
+      }
+      continue;
+    }
     results.push({
       id: createId(),
       kind: "document",
       name: file.name,
-      mimeType: file.type || "application/octet-stream",
+      mimeType,
       status: "ready",
       sizeBytes: file.size,
     });

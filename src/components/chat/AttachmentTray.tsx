@@ -2,16 +2,12 @@
 
 import { CloseIcon } from "@/components/icons";
 import { formatSize } from "@/lib/attachments/ingest";
+import {
+  attachmentKindLabel,
+  attachmentProcessingLabel,
+  attachmentStatusNote,
+} from "@/lib/attachments/labels";
 import type { Attachment } from "@/lib/chat/types";
-
-function kindLabel(attachment: Attachment): string {
-  if (attachment.kind === "image") return "Image";
-  if (attachment.kind === "text") return "Text";
-  if (attachment.mimeType === "application/pdf" || attachment.name.toLowerCase().endsWith(".pdf")) {
-    return "PDF";
-  }
-  return "File";
-}
 
 export function AttachmentTray({
   attachments,
@@ -29,8 +25,10 @@ export function AttachmentTray({
   return (
     <ul className="composer-files">
       {attachments.map((attachment) => {
-        const src = attachment.previewUrl || attachment.dataUrl;
-        const isImage = attachment.kind === "image" && src;
+        const src = attachment.kind === "image" ? attachment.previewUrl || attachment.dataUrl : undefined;
+        const isImage = Boolean(src);
+        const processing = attachmentProcessingLabel(attachment);
+        const note = attachmentStatusNote(attachment);
         return (
           <li
             key={attachment.id}
@@ -50,17 +48,13 @@ export function AttachmentTray({
               </button>
             ) : (
               <div className="file-card">
-                <span className="file-kind">{kindLabel(attachment)}</span>
-                {attachment.kind !== "image" ? (
-                  <span className="file-vision-note">
-                    {attachment.kind === "text" ? "Sent as text" : "Metadata only"}
-                  </span>
-                ) : null}
+                <span className="file-kind">{attachmentKindLabel(attachment)}</span>
+                {note ? <span className="file-vision-note">{note}</span> : null}
               </div>
             )}
             <span className="file-name">
               {attachment.error || attachment.name}
-              {attachment.status === "processing" ? " · compressing…" : ""}
+              {processing ? ` · ${processing}` : ""}
               {attachment.sizeBytes && !attachment.error ? ` · ${formatSize(attachment.sizeBytes)}` : ""}
             </span>
             {attachment.status === "error" && onRetry ? (

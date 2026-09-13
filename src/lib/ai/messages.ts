@@ -1,6 +1,7 @@
 import { SYSTEM_PROMPT } from "@/lib/chat/prompt";
 import type { ApiTurn } from "@/lib/chat/types";
 import type { NvidiaChatMessage, NvidiaContentPart } from "@/lib/ai/types";
+import { isImageAttachment } from "@/lib/attachments/validate";
 
 export function toChatCompletionsMessages(turns: ApiTurn[]): NvidiaChatMessage[] {
   const messages: NvidiaChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
@@ -11,7 +12,7 @@ export function toChatCompletionsMessages(turns: ApiTurn[]): NvidiaChatMessage[]
       continue;
     }
 
-    const images = turn.attachments?.filter((item) => item.dataUrl) ?? [];
+    const images = turn.attachments?.filter((item) => item.dataUrl && isImageAttachment(item)) ?? [];
     if (images.length === 0) {
       messages.push({ role: "user", content: turn.content || "(empty)" });
       continue;

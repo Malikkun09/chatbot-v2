@@ -1,10 +1,11 @@
 import { mergeAttachmentText } from "@/lib/attachments/ingest";
+import { isImageAttachment, isPdfAttachment } from "@/lib/attachments/validate";
 import {
   MAX_REQUEST_BYTES,
   RECENT_MESSAGE_COUNT,
   STUB_CHARS,
 } from "@/lib/constants";
-import type { ApiTurn, ChatMessage } from "@/lib/chat/types";
+import type { ApiAttachment, ApiTurn, ChatMessage } from "@/lib/chat/types";
 
 export function estimatePayloadBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).length;
@@ -42,35 +43,50 @@ export function toApiTurns(messages: ChatMessage[]): ApiTurn[] {
   }, -1);
 
   return filtered.map((message, index) => {
-    const allowImages = message.role === "user" && index === lastUser;
-    const stubs =
-      !allowImages && message.attachments?.length
-        ? message.attachments.map((attachment) => `[Attached ${attachment.kind ?? "file"}: ${attachment.name}]`).join(" ")
+    const allowBinary = message.role === "user" && index === lastUser;
+    const merged =
+      message.role === "user"
+        ? mergeAttachmentText(message.content, message.attachments ?? [])
+        : message.content;
+    const historyStubs =
+      !allowBinary && message.attachments?.length
+        ? message.attachments
+            .filter((attachment) => {
+              if (attachment.kind === "text" && attachment.textContent) return false;
+              if (
+                isPdfAttachment(attachment) &&
+                (attachment.textContent || attachment.extractionStatus)
+              ) {
+                return false;
+              }
+              return true;
+            })
+            .map((attachment) => `[Attached ${attachment.kind ?? "file"}: ${attachment.name}]`)
+            .join(" ")
         : "";
-    const content = allowImages
-      ? mergeAttachmentText(message.content, message.attachments ?? [])
-      : [message.content, stubs].filter(Boolean).join("\n\n").trim();
+    const content = [merged, historyStubs].filter(Boolean).join("\n\n");
 
-    const imageAttachments = allowImages
+    const binaryAttachments = allowBinary
       ? message.attachments
-          ?.filter(
-            (attachment) =>
-              attachment.kind === "image" &&
-              attachment.dataUrl &&
-              !attachment.stub,
+          ?.filter((attachment) => {
+            if (!attachment.dataUrl || attachment.stub) return false;
+            if (isImageAttachment(attachment)) return true;
+            return isPdfAttachment(attachment) && !attachment.textContent;
+          })
+          .map(
+            (attachment): ApiAttachment => ({
+              name: attachment.name,
+              mimeType: attachment.mimeType,
+              kind: attachment.kind,
+              dataUrl: attachment.dataUrl,
+            }),
           )
-          .map((attachment) => ({
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            kind: attachment.kind,
-            dataUrl: attachment.dataUrl,
-          }))
       : undefined;
 
     return {
       role: message.role === "assistant" ? "assistant" : "user",
       content,
-      attachments: imageAttachments?.length ? imageAttachments : undefined,
+      attachments: binaryAttachments?.length ? binaryAttachments : undefined,
     };
   });
 }

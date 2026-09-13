@@ -3,7 +3,8 @@ import { classifyThrown, errorMessage, makeError } from "@/lib/chat/errors";
 import { estimatePayloadBytes, fitPayload, isPayloadTooLarge } from "@/lib/chat/context";
 import type { ApiTurn, ChatRequestBody, TokenUsage } from "@/lib/chat/types";
 import { getChatProvider } from "@/lib/ai/provider";
-import { hasImageAttachments } from "@/lib/attachments/validate";
+import { hasImageAttachments, isImageAttachment, isTextAttachment } from "@/lib/attachments/validate";
+import { hydrateDocumentTurns, needsDocumentHydration } from "@/lib/extract/documents";
 import { encodeSse } from "@/lib/ai/sse";
 import { logChat } from "@/lib/logger";
 
@@ -20,6 +21,27 @@ function isApiTurn(value: unknown): value is ApiTurn {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return (record.role === "user" || record.role === "assistant") && typeof record.content === "string";
+}
+
+function toFitMessages(turns: ApiTurn[]) {
+  return turns.map((turn, index) => ({
+    id: `req_${index}`,
+    role: turn.role,
+    content: turn.content,
+    status: "completed" as const,
+    createdAt: Date.now(),
+    attachments: turn.attachments?.map((attachment, attachmentIndex) => ({
+      id: `att_${index}_${attachmentIndex}`,
+      kind:
+        attachment.kind ??
+        (isImageAttachment(attachment) ? "image" : isTextAttachment(attachment) ? "text" : "document"),
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      status: "ready" as const,
+      dataUrl: attachment.dataUrl,
+      textContent: attachment.textContent,
+    })),
+  }));
 }
 
 export async function POST(request: Request) {
@@ -52,38 +74,6 @@ export async function POST(request: Request) {
     return jsonError(400, "not_multimodal", model.provider);
   }
 
-  const fitted = fitPayload(
-    incoming.map((turn, index) => ({
-      id: `req_${index}`,
-      role: turn.role,
-      content: turn.content,
-      status: "completed" as const,
-      createdAt: Date.now(),
-      attachments: turn.attachments?.map((attachment, attachmentIndex) => ({
-        id: `att_${index}_${attachmentIndex}`,
-        kind: attachment.kind ?? (attachment.dataUrl ? "image" : "document"),
-        name: attachment.name,
-        mimeType: attachment.mimeType,
-        status: "ready" as const,
-        dataUrl: attachment.dataUrl,
-        textContent: attachment.textContent,
-      })),
-    })),
-  );
-
-  if (isPayloadTooLarge(fitted.bytes)) {
-    logChat("error", { category: "payload_too_large", bytes: fitted.bytes });
-    return jsonError(413, "payload_too_large");
-  }
-
-  logChat("start", {
-    model: model.id,
-    provider: model.provider,
-    turns: fitted.turns.length,
-    truncated: fitted.truncated,
-    bytes: fitted.bytes,
-  });
-
   const encoder = new TextEncoder();
   let ttftMs: number | undefined;
   let usage: TokenUsage | undefined;
@@ -100,6 +90,40 @@ export async function POST(request: Request) {
       send("meta", { model: model.id, provider: model.provider, label: model.label });
 
       try {
+        if (needsDocumentHydration(incoming)) {
+          send("status", { message: "Reading PDF…" });
+        }
+
+        const hydrated = await hydrateDocumentTurns(incoming);
+        if (hydrated.documents.length) {
+          send("documents", { items: hydrated.documents });
+          logChat("extract", {
+            model: model.id,
+            pdfs: hydrated.documents.length,
+            chars: hydrated.documents.reduce((sum, item) => sum + (item.chars ?? 0), 0),
+            truncated: hydrated.documents.some((item) => Boolean(item.truncated)),
+          });
+        }
+
+        const fitted = fitPayload(toFitMessages(hydrated.turns));
+        if (isPayloadTooLarge(fitted.bytes)) {
+          logChat("error", { category: "payload_too_large", bytes: fitted.bytes });
+          send("error", {
+            category: "payload_too_large",
+            message: errorMessage("payload_too_large", model.provider),
+          });
+          controller.close();
+          return;
+        }
+
+        logChat("start", {
+          model: model.id,
+          provider: model.provider,
+          turns: fitted.turns.length,
+          truncated: fitted.truncated,
+          bytes: fitted.bytes,
+        });
+
         for await (const event of provider.stream({
           messages: fitted.turns,
           signal: abort.signal,
